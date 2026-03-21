@@ -172,6 +172,33 @@
     #swipe-hint { display: block; }
     #hint { display: none; }
   }
+
+  /* Stack sidebar below board on narrow screens */
+  @media (max-width: 480px) {
+    #game-wrap {
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+    }
+
+    #sidebar {
+      flex-direction: row;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 8px;
+      min-width: unset;
+      width: 100%;
+    }
+
+    .panel {
+      padding: 6px 10px;
+      min-width: 60px;
+    }
+
+    .panel .val {
+      font-size: 1.1rem;
+    }
+  }
 </style>
 </head>
 <body>
@@ -225,8 +252,9 @@ const ROWS = 20;
 
 // Compute cell size from viewport
 function calcCellSize() {
-  const maxH = window.innerHeight - 130;
-  const maxW = window.innerWidth - 110; // room for sidebar
+  const narrow = window.innerWidth <= 480;
+  const maxH = window.innerHeight - (narrow ? 200 : 130); // extra room for stacked sidebar
+  const maxW = window.innerWidth - (narrow ? 16 : 110);   // full width when stacked
   const byH = Math.floor(maxH / ROWS);
   const byW = Math.floor(maxW / COLS);
   return Math.max(Math.min(byH, byW, 34), 18);
