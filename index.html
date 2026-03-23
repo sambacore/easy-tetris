@@ -160,11 +160,13 @@
   }
 
   #celebration-canvas {
-    position: absolute;
+    position: fixed;
     top: 0;
     left: 0;
+    width: 100vw;
+    height: 100vh;
     pointer-events: none;
-    z-index: 5;
+    z-index: 999;
   }
 
   /* mobile swipe hint icons */
@@ -219,7 +221,6 @@
 <div id="game-wrap">
   <div id="board-container">
     <canvas id="board"></canvas>
-    <canvas id="celebration-canvas"></canvas>
     <div id="overlay">
       <h2>GAME OVER</h2>
       <p id="final-score"></p>
@@ -293,8 +294,8 @@ function setupCanvases() {
   boardCanvas.height = ROWS * CELL;
   nextCanvas.width   = 6 * CELL;
   nextCanvas.height  = 3 * CELL;
-  celebCanvas.width  = COLS * CELL;
-  celebCanvas.height = ROWS * CELL;
+  celebCanvas.width  = window.innerWidth;
+  celebCanvas.height = window.innerHeight;
 }
 setupCanvases();
 
@@ -609,9 +610,14 @@ function spawnBurst(x, y, count, colors, speedMult, lifeFr) {
 }
 
 function triggerCelebration(type) {
-  const W = celebCanvas.width;
-  const H = celebCanvas.height;
-  const now = performance.now();
+  const now  = performance.now();
+  const rect = boardCanvas.getBoundingClientRect();
+  const bx   = rect.left;
+  const by   = rect.top;
+  const BW   = boardCanvas.width;
+  const BH   = boardCanvas.height;
+  const SW   = celebCanvas.width;
+  const SH   = celebCanvas.height;
 
   if (type === 'piece') {
     // ── Tier 1: piece lands — satisfying burst ────────────────────────────
@@ -622,8 +628,8 @@ function triggerCelebration(type) {
       const s = 2 + Math.random() * 5;
       const lifeFr = 36 + Math.random() * 12;          // ~600ms at 60fps
       particles.push(makePt(
-        (0.15 + Math.random() * 0.7) * W,
-        H - CELL * 0.5,
+        bx + (0.15 + Math.random() * 0.7) * BW,
+        by + BH - CELL * 0.5,
         Math.cos(a) * s, Math.sin(a) * s - 1,
         '#00e5ff',
         2 + Math.random() * 3,
@@ -634,8 +640,8 @@ function triggerCelebration(type) {
     }
     // Cyan ring shockwave expanding from bottom
     shockwaves.push({
-      x: W / 2, y: H,
-      radius: 4, maxRadius: W * 0.8,
+      x: bx + BW / 2, y: by + BH,
+      radius: 4, maxRadius: SW * 0.8,
       speed: 9, alpha: 0.88,
       color: '#00e5ff', lineWidth: 3,
       delay: 0, startMs: now,
@@ -650,8 +656,8 @@ function triggerCelebration(type) {
       const s = 4 + Math.random() * 9;
       const lifeFr = 54 + Math.random() * 18;          // ~900ms
       particles.push(makePt(
-        Math.random() * W,
-        H * 0.25 + Math.random() * H * 0.5,
+        bx + Math.random() * BW,
+        by + BH * 0.25 + Math.random() * BH * 0.5,
         Math.cos(a) * s, Math.sin(a) * s - 2,
         colors[Math.floor(Math.random() * colors.length)],
         3 + Math.random() * 4,
@@ -664,6 +670,8 @@ function triggerCelebration(type) {
     shockwaves.push({
       horizontal: true,
       progress: 0, speed: 1 / 18,
+      boardLeft: bx, boardRight: bx + BW, boardW: BW,
+      boardY1: by + BH * 0.38, boardY2: by + BH * 0.62,
       alpha: 0.92, color: '#00e5ff', lineWidth: 5,
       startMs: now, delay: 0,
     });
@@ -678,25 +686,25 @@ function triggerCelebration(type) {
     const colors = ['#ff2222','#ff7700','#ffee00','#44ff44','#00e5ff',
                     '#4444ff','#cc00ff','#ff44cc','#ffd700'];
     const shapes = ['dot', 'rect', 'star', 'tri'];
-    // Particles come from all four sides
+    // Particles come from all four sides of the board
     for (let i = 0; i < count; i++) {
       let px, py, vx, vy;
       const side = i % 4;
       const s = 3 + Math.random() * 8;
       if (side === 0) {       // top → downward
-        px = Math.random() * W; py = -10;
+        px = bx + Math.random() * BW; py = by - 10;
         const a = Math.PI * 0.25 + Math.random() * Math.PI * 0.5;
         vx = Math.cos(a) * s; vy = Math.sin(a) * s;
       } else if (side === 1) { // right → leftward
-        px = W + 10; py = Math.random() * H;
+        px = bx + BW + 10; py = by + Math.random() * BH;
         const a = Math.PI + (Math.random() - 0.5) * Math.PI * 0.5;
         vx = Math.cos(a) * s; vy = Math.sin(a) * s;
       } else if (side === 2) { // bottom → upward
-        px = Math.random() * W; py = H + 10;
+        px = bx + Math.random() * BW; py = by + BH + 10;
         const a = -Math.PI * 0.5 + (Math.random() - 0.5) * Math.PI * 0.5;
         vx = Math.cos(a) * s; vy = Math.sin(a) * s;
       } else {                 // left → rightward
-        px = -10; py = Math.random() * H;
+        px = bx - 10; py = by + Math.random() * BH;
         const a = (Math.random() - 0.5) * Math.PI * 0.5;
         vx = Math.cos(a) * s; vy = Math.sin(a) * s;
       }
@@ -710,12 +718,12 @@ function triggerCelebration(type) {
         { gravity: 0.05, trail: true, spinScale: 0.4 }
       ));
     }
-    // Three shockwave rings from center, staggered
+    // Three shockwave rings from board center, staggered
     for (let r = 0; r < 3; r++) {
       shockwaves.push({
-        x: W / 2, y: H / 2,
+        x: bx + BW / 2, y: by + BH / 2,
         radius: 0,
-        maxRadius: Math.sqrt(W * W + H * H) * 0.8,
+        maxRadius: Math.sqrt(SW * SW + SH * SH) * 0.8,
         speed: 8 + r * 3,
         alpha: 0.85 - r * 0.12,
         color: ['#ffd700', '#ff44cc', '#00e5ff'][r],
@@ -723,12 +731,12 @@ function triggerCelebration(type) {
         delay: r * 130, startMs: now,
       });
     }
-    // Laser beams (2-3) shooting across at angles
+    // Laser beams (2-3) shooting across at angles from board center
     const numLasers = 2 + Math.floor(Math.random() * 2);
     for (let l = 0; l < numLasers; l++) {
       const a = Math.random() * Math.PI;
-      const cx = W / 2, cy = H / 2;
-      const len = Math.max(W, H) * 1.6;
+      const cx = bx + BW / 2, cy = by + BH / 2;
+      const len = Math.max(SW, SH) * 1.6;
       laserBeams.push({
         x1: cx + Math.cos(a + Math.PI) * len,
         y1: cy + Math.sin(a + Math.PI) * len,
@@ -753,13 +761,13 @@ function triggerCelebration(type) {
     tetrisText = { startMs: now, duration: 2000 };
     // Strong screen shake: 6 hits ±7px
     screenShake = { hits: 6, amp: 7, nextHitMs: now, intervalMs: 65 };
-    // 3-4 deferred firework bursts
+    // 3-4 deferred firework bursts inside board area
     const numFW = 3 + Math.floor(Math.random() * 2);
     for (let f = 0; f < numFW; f++) {
       pendingBursts.push({
         ms: now + 350 + f * 220 + Math.random() * 140,
-        x: W * (0.15 + Math.random() * 0.7),
-        y: H * (0.1 + Math.random() * 0.75),
+        x: bx + BW * (0.15 + Math.random() * 0.7),
+        y: by + BH * (0.1 + Math.random() * 0.75),
         count: 20 + Math.floor(Math.random() * 16),
         colors: ['#ff2222','#ffd700','#ff44cc','#44ff44','#00e5ff','#ffffff'],
       });
@@ -837,7 +845,12 @@ function animateCelebration(ts) {
       sw.progress += sw.speed;
       sw.alpha    -= 0.034;
       if (sw.alpha <= 0 || sw.progress >= 1) { shockwaves.splice(i, 1); continue; }
-      const x = sw.progress * W;
+      const swBL = sw.boardLeft  !== undefined ? sw.boardLeft  : 0;
+      const swBR = sw.boardRight !== undefined ? sw.boardRight : W;
+      const swBW = sw.boardW     !== undefined ? sw.boardW     : W;
+      const swY1 = sw.boardY1    !== undefined ? sw.boardY1    : H * 0.38;
+      const swY2 = sw.boardY2    !== undefined ? sw.boardY2    : H * 0.62;
+      const x = sw.progress * swBW;
       cctx.save();
       cctx.globalAlpha  = sw.alpha;
       cctx.strokeStyle  = sw.color;
@@ -845,11 +858,11 @@ function animateCelebration(ts) {
       cctx.shadowColor  = sw.color;
       cctx.shadowBlur   = 20;
       cctx.beginPath();
-      // two lines sweeping inward from edges
-      cctx.moveTo(0,     H * 0.38); cctx.lineTo(x,     H * 0.38);
-      cctx.moveTo(W,     H * 0.38); cctx.lineTo(W - x, H * 0.38);
-      cctx.moveTo(0,     H * 0.62); cctx.lineTo(x,     H * 0.62);
-      cctx.moveTo(W,     H * 0.62); cctx.lineTo(W - x, H * 0.62);
+      // two lines sweeping inward from board edges
+      cctx.moveTo(swBL,     swY1); cctx.lineTo(swBL + x, swY1);
+      cctx.moveTo(swBR,     swY1); cctx.lineTo(swBR - x, swY1);
+      cctx.moveTo(swBL,     swY2); cctx.lineTo(swBL + x, swY2);
+      cctx.moveTo(swBR,     swY2); cctx.lineTo(swBR - x, swY2);
       cctx.stroke();
       cctx.shadowBlur = 0;
       cctx.restore();
@@ -973,10 +986,13 @@ function animateCelebration(ts) {
       const holdDur = Math.max(1, holdEnd - fadeIn);
       const pt      = Math.max(0, elapsed - fadeIn) / holdDur;
       const pulse   = 1 + Math.sin(pt * Math.PI * 6) * 0.11;
-      const fs      = Math.floor(Math.max(28, W / 4.0) * pulse);
+      const tRect   = boardCanvas.getBoundingClientRect();
+      const tCx     = tRect.left + boardCanvas.width / 2;
+      const tCy     = tRect.top  + boardCanvas.height / 2;
+      const fs      = Math.floor(Math.max(28, boardCanvas.width / 4.0) * pulse);
 
-      // Rainbow gradient
-      const grad = cctx.createLinearGradient(W * 0.05, 0, W * 0.95, 0);
+      // Rainbow gradient centered on board
+      const grad = cctx.createLinearGradient(tCx - boardCanvas.width * 0.45, 0, tCx + boardCanvas.width * 0.45, 0);
       grad.addColorStop(0,    '#ff2222');
       grad.addColorStop(0.14, '#ff8800');
       grad.addColorStop(0.28, '#ffee00');
@@ -994,11 +1010,11 @@ function animateCelebration(ts) {
       cctx.shadowColor    = '#ffd700';
       cctx.shadowBlur     = 52;
       cctx.fillStyle      = grad;
-      cctx.fillText('TETRIS!', W / 2, H / 2);
+      cctx.fillText('TETRIS!', tCx, tCy);
       cctx.shadowBlur     = 12;
       cctx.strokeStyle    = '#ffffff';
       cctx.lineWidth      = 1.5;
-      cctx.strokeText('TETRIS!', W / 2, H / 2);
+      cctx.strokeText('TETRIS!', tCx, tCy);
       cctx.restore();
     }
   }
@@ -1083,31 +1099,34 @@ const MSG_TETRIS = [
 let messages = [];
 
 function triggerMessage(type) {
-  const W   = celebCanvas.width;
-  const H   = celebCanvas.height;
-  const now = performance.now();
+  const now  = performance.now();
+  const rect = boardCanvas.getBoundingClientRect();
+  const bx   = rect.left;
+  const by   = rect.top;
+  const BW   = boardCanvas.width;
+  const BH   = boardCanvas.height;
 
   if (type === 'piece') {
     const text = MSG_PIECE[Math.floor(Math.random() * MSG_PIECE.length)];
-    const cx   = W * (0.35 + Math.random() * 0.3);
+    const cx   = bx + BW * (0.35 + Math.random() * 0.3);
     messages.push({
-      lines: [text], x: cx, y: H * 0.82,
+      lines: [text], x: cx, y: by + BH * 0.82,
       color: Math.random() > 0.5 ? '#00e5ff' : '#ffffff',
       size: 20, maxAge: 800, type: 'piece', startMs: now,
     });
   } else if (type === 'line') {
     const text  = MSG_LINE[Math.floor(Math.random() * MSG_LINE.length)];
     const color = Math.random() > 0.5 ? '#ffee00' : '#ff44cc';
-    const cx    = W * (0.3 + Math.random() * 0.4);
+    const cx    = bx + BW * (0.3 + Math.random() * 0.4);
     messages.push({
-      lines: [text], x: cx, y: H * 0.62,
+      lines: [text], x: cx, y: by + BH * 0.62,
       color,
       size: 28, maxAge: 1100, type: 'line', startMs: now,
     });
   } else if (type === 'tetris') {
     const pool = MSG_TETRIS[Math.floor(Math.random() * MSG_TETRIS.length)];
     messages.push({
-      lines: pool, x: W / 2, y: H * 0.32,
+      lines: pool, x: bx + BW / 2, y: by + BH * 0.32,
       color: 'rainbow',
       size: 40, maxAge: 2200, type: 'tetris', startMs: now,
     });
@@ -1295,5 +1314,6 @@ window.addEventListener('resize', () => {
 // ─── Start ───────────────────────────────────────────────────────────────────
 initGame();
 </script>
+<canvas id="celebration-canvas"></canvas>
 </body>
 </html>
