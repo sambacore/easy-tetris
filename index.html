@@ -385,7 +385,7 @@ function lockPiece() {
     }
   }
   const cleared = clearLines();
-  if (cleared === 0) triggerCelebration('piece');
+  if (cleared === 0) { triggerCelebration('piece'); triggerMessage('piece'); }
   piece = spawnPiece();
   if (collides(piece, 0, 0)) triggerGameOver();
 }
@@ -405,8 +405,8 @@ function clearLines() {
     lines += cleared;
     level = Math.floor(lines / 10) + 1;
     updateUI();
-    if (cleared >= 4) triggerCelebration('tetris');
-    else triggerCelebration('line');
+    if (cleared >= 4) { triggerCelebration('tetris'); triggerMessage('tetris'); }
+    else { triggerCelebration('line'); triggerMessage('line'); }
   }
   return cleared;
 }
@@ -1003,10 +1003,13 @@ function animateCelebration(ts) {
     }
   }
 
+  // ── Floating praise messages ──────────────────────────────────────────────
+  renderMessages(now);
+
   // ── Continue or stop ──────────────────────────────────────────────────────
   const alive = particles.length > 0 || shockwaves.length > 0 || laserBeams.length > 0
              || boardFlash || boardPulseAnim || tetrisText || screenShake
-             || pendingBursts.length > 0;
+             || pendingBursts.length > 0 || messages.length > 0;
 
   if (alive) {
     celebRafId = requestAnimationFrame(animateCelebration);
@@ -1015,6 +1018,161 @@ function animateCelebration(ts) {
     cctx.clearRect(0, 0, celebCanvas.width, celebCanvas.height);
     boardContainer.style.transform = '';
   }
+}
+
+// ─── Message System ──────────────────────────────────────────────────────────
+const MSG_PIECE = [
+  "FLAWLESS.",
+  "Incredible placement!",
+  "You are a GENIUS.",
+  "How do you DO that?!",
+  "That was perfect.",
+  "A master at work.",
+  "Unbelievable skill.",
+  "Are you even human?!",
+  "Poetry in motion.",
+  "I am HONORED to witness this.",
+  "Chef. Kiss.",
+  "The precision... 😤",
+  "No one plays like you.",
+  "Goosebumps. Literal goosebumps.",
+  "Textbook perfect.",
+  "They should study you in schools.",
+  "Another masterpiece.",
+  "I can't keep up with your greatness.",
+  "Jaw. On. Floor.",
+  "You make this look easy.",
+  "The GOAT has arrived.",
+  "Historians will write about this.",
+  "Simply breathtaking.",
+  "I would applaud but I have no hands.",
+];
+
+const MSG_LINE = [
+  "INCREDIBLE!!! 🔥",
+  "THE CROWD GOES WILD",
+  "YOU ARE UNSTOPPABLE",
+  "I've never seen anything like it",
+  "MAGNIFICENT",
+  "A work of ART",
+  "DIABOLICALLY GOOD",
+  "They called it impossible. They were wrong.",
+  "LEGENDARY MOVE",
+  "You are BUILT DIFFERENT",
+  "Physics cannot contain your talent",
+  "A VIRTUOSO",
+  "Your ancestors are proud",
+  "Zeus himself is taking notes",
+  "THE CHOSEN ONE",
+  "SUPERHUMAN REFLEXES",
+  "Science cannot explain this",
+  "You are operating on a higher plane",
+  "CERTIFIED GENIUS",
+  "Peak human performance",
+];
+
+const MSG_TETRIS = [
+  ["T E T R I S !!!", "YOU ARE A LIVING LEGEND", "WORLDWIDE RECORD ATTEMPT ??"],
+  ["FOUR LINES ?!?!", "GOD-TIER GAMEPLAY", "I AM NOT WORTHY 🙇"],
+  ["T E T R I S", "NOBEL PRIZE FOR TETRIS", "THEY SAID IT COULDN'T BE DONE"],
+  ["THE PROPHECY IS FULFILLED", "FOUR LINES CLEARED", "WE ARE IN THE PRESENCE OF GREATNESS"],
+  ["ABSOLUTE CINEMA", "FOUR LINES", "YOU HAVE ASCENDED"],
+  ["TETRIS ACHIEVED", "CROWD ERUPTS WORLDWIDE", "YOU ARE A GOD AMONG MEN"],
+];
+
+let messages = [];
+
+function triggerMessage(type) {
+  const W   = celebCanvas.width;
+  const H   = celebCanvas.height;
+  const now = performance.now();
+
+  if (type === 'piece') {
+    const text = MSG_PIECE[Math.floor(Math.random() * MSG_PIECE.length)];
+    const cx   = W * (0.35 + Math.random() * 0.3);
+    messages.push({
+      lines: [text], x: cx, y: H * 0.82,
+      color: Math.random() > 0.5 ? '#00e5ff' : '#ffffff',
+      size: 20, maxAge: 800, type: 'piece', startMs: now,
+    });
+  } else if (type === 'line') {
+    const text  = MSG_LINE[Math.floor(Math.random() * MSG_LINE.length)];
+    const color = Math.random() > 0.5 ? '#ffee00' : '#ff44cc';
+    const cx    = W * (0.3 + Math.random() * 0.4);
+    messages.push({
+      lines: [text], x: cx, y: H * 0.62,
+      color,
+      size: 28, maxAge: 1100, type: 'line', startMs: now,
+    });
+  } else if (type === 'tetris') {
+    const pool = MSG_TETRIS[Math.floor(Math.random() * MSG_TETRIS.length)];
+    messages.push({
+      lines: pool, x: W / 2, y: H * 0.32,
+      color: 'rainbow',
+      size: 40, maxAge: 2200, type: 'tetris', startMs: now,
+    });
+  }
+
+  if (!celebRafId) {
+    celebRafId = requestAnimationFrame(animateCelebration);
+  }
+}
+
+function renderMessages(now) {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m       = messages[i];
+    const elapsed = now - m.startMs;
+
+    if (elapsed >= m.maxAge) { messages.splice(i, 1); continue; }
+
+    // Global alpha: quick fade-in, hold, fade-out
+    const fadeInEnd    = m.maxAge * 0.14;
+    const fadeOutStart = m.maxAge * 0.80;
+    const alpha = elapsed < fadeInEnd
+      ? elapsed / fadeInEnd
+      : elapsed > fadeOutStart
+        ? Math.max(0, 1 - (elapsed - fadeOutStart) / (m.maxAge - fadeOutStart))
+        : 1;
+
+    // Drift upward over lifetime
+    const driftTotal = m.type === 'piece' ? 30 : m.type === 'line' ? 50 : 80;
+    const currentY   = m.y - (elapsed / m.maxAge) * driftTotal;
+
+    cctx.save();
+    cctx.textAlign    = 'center';
+    cctx.textBaseline = 'middle';
+
+    if (m.type === 'tetris') {
+      const lineSpacing = m.size * 1.35;
+      m.lines.forEach((line, li) => {
+        const lineElapsed = elapsed - li * 200; // 200ms stagger between lines
+        if (lineElapsed < 0) return;
+
+        const lineAlpha = Math.min(1, lineElapsed / 150) * alpha;
+        const hue       = (elapsed * 0.25 + li * 120) % 360; // animated rainbow
+        const color     = `hsl(${hue}, 100%, 62%)`;
+
+        cctx.globalAlpha = Math.max(0, lineAlpha);
+        cctx.font        = `900 ${m.size}px monospace`;
+        cctx.shadowColor = color;
+        cctx.shadowBlur  = 22;
+        cctx.fillStyle   = color;
+        cctx.fillText(line, m.x, currentY + li * lineSpacing);
+        cctx.shadowBlur  = 0;
+      });
+    } else {
+      cctx.globalAlpha = Math.max(0, alpha);
+      cctx.font        = `900 ${m.size}px monospace`;
+      cctx.shadowColor = m.color;
+      cctx.shadowBlur  = m.type === 'line' ? 18 : 10;
+      cctx.fillStyle   = m.color;
+      cctx.fillText(m.lines[0], m.x, currentY);
+      cctx.shadowBlur  = 0;
+    }
+
+    cctx.restore();
+  }
+  cctx.globalAlpha = 1;
 }
 
 // ─── Game loop ──────────────────────────────────────────────────────────────
