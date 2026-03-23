@@ -159,6 +159,14 @@
     position: relative;
   }
 
+  #celebration-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    pointer-events: none;
+    z-index: 5;
+  }
+
   /* mobile swipe hint icons */
   #swipe-hint {
     display: none;
@@ -211,6 +219,7 @@
 <div id="game-wrap">
   <div id="board-container">
     <canvas id="board"></canvas>
+    <canvas id="celebration-canvas"></canvas>
     <div id="overlay">
       <h2>GAME OVER</h2>
       <p id="final-score"></p>
@@ -273,8 +282,10 @@ const SCORE_TABLE = [0, 100, 300, 500, 800];
 // ─── Canvas setup ───────────────────────────────────────────────────────────
 const boardCanvas  = document.getElementById('board');
 const nextCanvas   = document.getElementById('next-canvas');
+const celebCanvas  = document.getElementById('celebration-canvas');
 const bctx         = boardCanvas.getContext('2d');
 const nctx         = nextCanvas.getContext('2d');
+const cctx         = celebCanvas.getContext('2d');
 
 function setupCanvases() {
   CELL = calcCellSize();
@@ -282,6 +293,8 @@ function setupCanvases() {
   boardCanvas.height = ROWS * CELL;
   nextCanvas.width   = 6 * CELL;
   nextCanvas.height  = 3 * CELL;
+  celebCanvas.width  = COLS * CELL;
+  celebCanvas.height = ROWS * CELL;
 }
 setupCanvases();
 
@@ -371,7 +384,8 @@ function lockPiece() {
       board[ny][nx] = 1;
     }
   }
-  clearLines();
+  const cleared = clearLines();
+  if (cleared === 0) triggerCelebration('piece');
   piece = spawnPiece();
   if (collides(piece, 0, 0)) triggerGameOver();
 }
@@ -391,7 +405,10 @@ function clearLines() {
     lines += cleared;
     level = Math.floor(lines / 10) + 1;
     updateUI();
+    if (cleared >= 4) triggerCelebration('tetris');
+    else triggerCelebration('line');
   }
+  return cleared;
 }
 
 function hardDrop() {
@@ -491,6 +508,512 @@ function render() {
     nctx.fillRect((nx0 + i) * ns + pad, ny0 * ns + pad, ns - pad*2, ns - pad*2);
     nctx.fillStyle = 'rgba(255,255,255,0.12)';
     nctx.fillRect((nx0 + i) * ns + pad, ny0 * ns + pad, ns - pad*2, 3);
+  }
+}
+
+// ─── Celebration system ──────────────────────────────────────────────────────
+let particles      = [];
+let shockwaves     = [];   // ring: {x,y,radius,maxRadius,speed,alpha,color,lineWidth,delay,startMs}
+                           // horiz: {horizontal,progress,speed,alpha,color,lineWidth,startMs,delay}
+let laserBeams     = [];   // {x1,y1,x2,y2,alpha,targetAlpha,rising,decay,color,lineWidth,startMs,delay}
+let screenShake    = null; // {hits, amp, nextHitMs, intervalMs}
+let boardFlash     = null; // {color, alpha, decay}  — tier 2 single flash
+let boardPulseAnim = null; // {color, pulseCount, startMs, pulseDuration, maxAlpha} — tier 3 cycling
+let tetrisText     = null; // {startMs, duration}
+let pendingBursts  = [];   // [{ms, x, y, count, colors}]
+let celebRafId     = null;
+
+const boardContainer = document.getElementById('board-container');
+
+function applyShake(amp) {
+  const dx = (Math.random() - 0.5) * amp * 2;
+  const dy = (Math.random() - 0.5) * amp * 2;
+  boardContainer.style.transform = `translate(${dx}px,${dy}px)`;
+  setTimeout(() => { boardContainer.style.transform = ''; }, 55);
+}
+
+function drawStar(ctx, x, y, spikes, outer, inner) {
+  const step = Math.PI / spikes;
+  let rot = -Math.PI / 2;
+  ctx.beginPath();
+  for (let i = 0; i < spikes * 2; i++) {
+    const r = i % 2 === 0 ? outer : inner;
+    ctx.lineTo(x + Math.cos(rot) * r, y + Math.sin(rot) * r);
+    rot += step;
+  }
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawParticle(ctx, p) {
+  ctx.save();
+  ctx.translate(p.x, p.y);
+  ctx.rotate(p.rot);
+  ctx.fillStyle = p.color;
+  switch (p.shape) {
+    case 'rect':
+      ctx.fillRect(-p.size * 0.55, -p.size * 0.28, p.size * 1.1, p.size * 0.56);
+      break;
+    case 'star':
+      drawStar(ctx, 0, 0, 5, p.size * 0.5, p.size * 0.22);
+      break;
+    case 'tri':
+      ctx.beginPath();
+      ctx.moveTo(0, -p.size * 0.55);
+      ctx.lineTo(p.size * 0.47, p.size * 0.42);
+      ctx.lineTo(-p.size * 0.47, p.size * 0.42);
+      ctx.closePath();
+      ctx.fill();
+      break;
+    default: // dot / circle
+      ctx.beginPath();
+      ctx.arc(0, 0, p.size * 0.5, 0, Math.PI * 2);
+      ctx.fill();
+  }
+  ctx.restore();
+}
+
+function makePt(x, y, vx, vy, color, size, lifeFr, shape, opts) {
+  opts = opts || {};
+  return {
+    x, y, vx, vy, color, size, shape,
+    alpha: 1,
+    decay: 1 / lifeFr,
+    gravity: opts.gravity !== undefined ? opts.gravity : 0.12,
+    rot: Math.random() * Math.PI * 2,
+    spin: (Math.random() - 0.5) * (opts.spinScale || 0.3),
+    twinkle: opts.twinkle || false,
+    twPhase: Math.random() * Math.PI * 2,
+    twFreq: 0.25 + Math.random() * 0.35,
+    trail: opts.trail ? [] : null,
+  };
+}
+
+function spawnBurst(x, y, count, colors, speedMult, lifeFr) {
+  speedMult = speedMult || 1;
+  lifeFr = lifeFr || 50;
+  const shapes = ['dot', 'dot', 'rect', 'star'];
+  for (let i = 0; i < count; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const s = (2 + Math.random() * 5) * speedMult;
+    particles.push(makePt(
+      x, y,
+      Math.cos(a) * s, Math.sin(a) * s,
+      colors[Math.floor(Math.random() * colors.length)],
+      3 + Math.random() * 4,
+      lifeFr,
+      shapes[Math.floor(Math.random() * shapes.length)],
+      { gravity: 0.1, trail: s > 6, spinScale: 0.35 }
+    ));
+  }
+}
+
+function triggerCelebration(type) {
+  const W = celebCanvas.width;
+  const H = celebCanvas.height;
+  const now = performance.now();
+
+  if (type === 'piece') {
+    // ── Tier 1: piece lands — satisfying burst ────────────────────────────
+    const count = 25 + Math.floor(Math.random() * 11); // 25-35
+    const shapes = ['dot', 'rect', 'star'];
+    for (let i = 0; i < count; i++) {
+      const a = Math.random() * Math.PI * 2;           // all directions
+      const s = 2 + Math.random() * 5;
+      const lifeFr = 36 + Math.random() * 12;          // ~600ms at 60fps
+      particles.push(makePt(
+        (0.15 + Math.random() * 0.7) * W,
+        H - CELL * 0.5,
+        Math.cos(a) * s, Math.sin(a) * s - 1,
+        '#00e5ff',
+        2 + Math.random() * 3,
+        lifeFr,
+        shapes[Math.floor(Math.random() * shapes.length)],
+        { gravity: 0.15, twinkle: Math.random() > 0.45 }
+      ));
+    }
+    // Cyan ring shockwave expanding from bottom
+    shockwaves.push({
+      x: W / 2, y: H,
+      radius: 4, maxRadius: W * 0.8,
+      speed: 9, alpha: 0.88,
+      color: '#00e5ff', lineWidth: 3,
+      delay: 0, startMs: now,
+    });
+
+  } else if (type === 'line') {
+    // ── Tier 2: line cleared — explosion ─────────────────────────────────
+    const count = 50 + Math.floor(Math.random() * 21); // 50-70
+    const colors = ['#00e5ff', '#ffffff', '#4499ff', '#00ff55', '#ff44bb'];
+    for (let i = 0; i < count; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const s = 4 + Math.random() * 9;
+      const lifeFr = 54 + Math.random() * 18;          // ~900ms
+      particles.push(makePt(
+        Math.random() * W,
+        H * 0.25 + Math.random() * H * 0.5,
+        Math.cos(a) * s, Math.sin(a) * s - 2,
+        colors[Math.floor(Math.random() * colors.length)],
+        3 + Math.random() * 4,
+        lifeFr,
+        Math.random() > 0.4 ? 'rect' : 'dot',
+        { gravity: 0.11, trail: s > 9, spinScale: 0.4 }
+      ));
+    }
+    // Horizontal shockwave: two lines sweeping from edges to center
+    shockwaves.push({
+      horizontal: true,
+      progress: 0, speed: 1 / 18,
+      alpha: 0.92, color: '#00e5ff', lineWidth: 5,
+      startMs: now, delay: 0,
+    });
+    // Strong board flash
+    boardFlash = { color: '#bbffff', alpha: 0.7, decay: 0.024 };
+    // Screen shake: 3 hits ±4px
+    screenShake = { hits: 3, amp: 4, nextHitMs: now, intervalMs: 80 };
+
+  } else if (type === 'tetris') {
+    // ── Tier 3: TETRIS! — absolutely unhinged ─────────────────────────────
+    const count = 120 + Math.floor(Math.random() * 41); // 120-160
+    const colors = ['#ff2222','#ff7700','#ffee00','#44ff44','#00e5ff',
+                    '#4444ff','#cc00ff','#ff44cc','#ffd700'];
+    const shapes = ['dot', 'rect', 'star', 'tri'];
+    // Particles come from all four sides
+    for (let i = 0; i < count; i++) {
+      let px, py, vx, vy;
+      const side = i % 4;
+      const s = 3 + Math.random() * 8;
+      if (side === 0) {       // top → downward
+        px = Math.random() * W; py = -10;
+        const a = Math.PI * 0.25 + Math.random() * Math.PI * 0.5;
+        vx = Math.cos(a) * s; vy = Math.sin(a) * s;
+      } else if (side === 1) { // right → leftward
+        px = W + 10; py = Math.random() * H;
+        const a = Math.PI + (Math.random() - 0.5) * Math.PI * 0.5;
+        vx = Math.cos(a) * s; vy = Math.sin(a) * s;
+      } else if (side === 2) { // bottom → upward
+        px = Math.random() * W; py = H + 10;
+        const a = -Math.PI * 0.5 + (Math.random() - 0.5) * Math.PI * 0.5;
+        vx = Math.cos(a) * s; vy = Math.sin(a) * s;
+      } else {                 // left → rightward
+        px = -10; py = Math.random() * H;
+        const a = (Math.random() - 0.5) * Math.PI * 0.5;
+        vx = Math.cos(a) * s; vy = Math.sin(a) * s;
+      }
+      const lifeFr = 90 + Math.random() * 60; // spans the full 2000ms
+      particles.push(makePt(
+        px, py, vx, vy,
+        colors[Math.floor(Math.random() * colors.length)],
+        4 + Math.random() * 8,
+        lifeFr,
+        shapes[Math.floor(Math.random() * shapes.length)],
+        { gravity: 0.05, trail: true, spinScale: 0.4 }
+      ));
+    }
+    // Three shockwave rings from center, staggered
+    for (let r = 0; r < 3; r++) {
+      shockwaves.push({
+        x: W / 2, y: H / 2,
+        radius: 0,
+        maxRadius: Math.sqrt(W * W + H * H) * 0.8,
+        speed: 8 + r * 3,
+        alpha: 0.85 - r * 0.12,
+        color: ['#ffd700', '#ff44cc', '#00e5ff'][r],
+        lineWidth: 4 - r * 0.7,
+        delay: r * 130, startMs: now,
+      });
+    }
+    // Laser beams (2-3) shooting across at angles
+    const numLasers = 2 + Math.floor(Math.random() * 2);
+    for (let l = 0; l < numLasers; l++) {
+      const a = Math.random() * Math.PI;
+      const cx = W / 2, cy = H / 2;
+      const len = Math.max(W, H) * 1.6;
+      laserBeams.push({
+        x1: cx + Math.cos(a + Math.PI) * len,
+        y1: cy + Math.sin(a + Math.PI) * len,
+        x2: cx + Math.cos(a) * len,
+        y2: cy + Math.sin(a) * len,
+        alpha: 0, targetAlpha: 1, rising: true,
+        decay: 0.055,
+        color: ['#ffffff','#ffd700','#00e5ff','#ff44cc'][Math.floor(Math.random() * 4)],
+        lineWidth: 2 + Math.random() * 2,
+        startMs: now, delay: l * 170,
+      });
+    }
+    // Gold board pulses ×3
+    boardPulseAnim = {
+      color: '#ffd700',
+      pulseCount: 3,
+      startMs: now,
+      pulseDuration: 330,
+      maxAlpha: 0.5,
+    };
+    // TETRIS! text with rainbow gradient + scale pulse
+    tetrisText = { startMs: now, duration: 2000 };
+    // Strong screen shake: 6 hits ±7px
+    screenShake = { hits: 6, amp: 7, nextHitMs: now, intervalMs: 65 };
+    // 3-4 deferred firework bursts
+    const numFW = 3 + Math.floor(Math.random() * 2);
+    for (let f = 0; f < numFW; f++) {
+      pendingBursts.push({
+        ms: now + 350 + f * 220 + Math.random() * 140,
+        x: W * (0.15 + Math.random() * 0.7),
+        y: H * (0.1 + Math.random() * 0.75),
+        count: 20 + Math.floor(Math.random() * 16),
+        colors: ['#ff2222','#ffd700','#ff44cc','#44ff44','#00e5ff','#ffffff'],
+      });
+    }
+  }
+
+  if (!celebRafId) {
+    celebRafId = requestAnimationFrame(animateCelebration);
+  }
+}
+
+function animateCelebration(ts) {
+  const W   = celebCanvas.width;
+  const H   = celebCanvas.height;
+  const now = performance.now();
+
+  cctx.clearRect(0, 0, W, H);
+
+  // ── Screen shake ─────────────────────────────────────────────────────────
+  if (screenShake) {
+    if (screenShake.hits > 0 && now >= screenShake.nextHitMs) {
+      applyShake(screenShake.amp);
+      screenShake.hits--;
+      screenShake.nextHitMs = now + screenShake.intervalMs;
+    } else if (screenShake.hits <= 0 && now > screenShake.nextHitMs + 75) {
+      boardContainer.style.transform = '';
+      screenShake = null;
+    }
+  }
+
+  // ── Pending firework bursts ───────────────────────────────────────────────
+  for (let i = pendingBursts.length - 1; i >= 0; i--) {
+    if (now >= pendingBursts[i].ms) {
+      const b = pendingBursts[i];
+      spawnBurst(b.x, b.y, b.count, b.colors, 1.2, 45);
+      pendingBursts.splice(i, 1);
+    }
+  }
+
+  // ── Tier 2 board flash ────────────────────────────────────────────────────
+  if (boardFlash) {
+    boardFlash.alpha -= boardFlash.decay;
+    if (boardFlash.alpha <= 0) {
+      boardFlash = null;
+    } else {
+      cctx.globalAlpha = boardFlash.alpha;
+      cctx.fillStyle   = boardFlash.color;
+      cctx.fillRect(0, 0, W, H);
+      cctx.globalAlpha = 1;
+    }
+  }
+
+  // ── Tier 3 cycling gold board pulse ──────────────────────────────────────
+  if (boardPulseAnim) {
+    const elapsed  = now - boardPulseAnim.startMs;
+    const totalDur = boardPulseAnim.pulseCount * boardPulseAnim.pulseDuration;
+    if (elapsed >= totalDur) {
+      boardPulseAnim = null;
+    } else {
+      const t     = (elapsed % boardPulseAnim.pulseDuration) / boardPulseAnim.pulseDuration;
+      const alpha = Math.sin(t * Math.PI) * boardPulseAnim.maxAlpha;
+      cctx.globalAlpha = Math.max(0, alpha);
+      cctx.fillStyle   = boardPulseAnim.color;
+      cctx.fillRect(0, 0, W, H);
+      cctx.globalAlpha = 1;
+    }
+  }
+
+  // ── Shockwaves ────────────────────────────────────────────────────────────
+  for (let i = shockwaves.length - 1; i >= 0; i--) {
+    const sw = shockwaves[i];
+    if (now - sw.startMs < sw.delay) continue;
+
+    if (sw.horizontal) {
+      sw.progress += sw.speed;
+      sw.alpha    -= 0.034;
+      if (sw.alpha <= 0 || sw.progress >= 1) { shockwaves.splice(i, 1); continue; }
+      const x = sw.progress * W;
+      cctx.save();
+      cctx.globalAlpha  = sw.alpha;
+      cctx.strokeStyle  = sw.color;
+      cctx.lineWidth    = sw.lineWidth;
+      cctx.shadowColor  = sw.color;
+      cctx.shadowBlur   = 20;
+      cctx.beginPath();
+      // two lines sweeping inward from edges
+      cctx.moveTo(0,     H * 0.38); cctx.lineTo(x,     H * 0.38);
+      cctx.moveTo(W,     H * 0.38); cctx.lineTo(W - x, H * 0.38);
+      cctx.moveTo(0,     H * 0.62); cctx.lineTo(x,     H * 0.62);
+      cctx.moveTo(W,     H * 0.62); cctx.lineTo(W - x, H * 0.62);
+      cctx.stroke();
+      cctx.shadowBlur = 0;
+      cctx.restore();
+    } else {
+      sw.radius += sw.speed;
+      sw.alpha  -= 0.014;
+      if (sw.alpha <= 0 || sw.radius > sw.maxRadius) { shockwaves.splice(i, 1); continue; }
+      cctx.save();
+      cctx.globalAlpha = sw.alpha;
+      cctx.strokeStyle = sw.color;
+      cctx.lineWidth   = sw.lineWidth;
+      cctx.shadowColor = sw.color;
+      cctx.shadowBlur  = 16;
+      cctx.beginPath();
+      cctx.arc(sw.x, sw.y, sw.radius, 0, Math.PI * 2);
+      cctx.stroke();
+      cctx.shadowBlur = 0;
+      cctx.restore();
+    }
+  }
+  cctx.globalAlpha = 1;
+
+  // ── Laser beams ───────────────────────────────────────────────────────────
+  for (let i = laserBeams.length - 1; i >= 0; i--) {
+    const lb = laserBeams[i];
+    if (now - lb.startMs < lb.delay) continue;
+    if (lb.rising) {
+      lb.alpha += 0.2;
+      if (lb.alpha >= lb.targetAlpha) { lb.alpha = lb.targetAlpha; lb.rising = false; }
+    } else {
+      lb.alpha -= lb.decay;
+    }
+    if (lb.alpha <= 0) { laserBeams.splice(i, 1); continue; }
+    cctx.save();
+    cctx.globalAlpha = lb.alpha;
+    cctx.strokeStyle = lb.color;
+    cctx.lineWidth   = lb.lineWidth * 4;
+    cctx.shadowColor = lb.color;
+    cctx.shadowBlur  = 26;
+    cctx.beginPath();
+    cctx.moveTo(lb.x1, lb.y1);
+    cctx.lineTo(lb.x2, lb.y2);
+    cctx.stroke();
+    // bright white core
+    cctx.globalAlpha = lb.alpha * 0.75;
+    cctx.strokeStyle = '#ffffff';
+    cctx.lineWidth   = lb.lineWidth;
+    cctx.shadowBlur  = 6;
+    cctx.beginPath();
+    cctx.moveTo(lb.x1, lb.y1);
+    cctx.lineTo(lb.x2, lb.y2);
+    cctx.stroke();
+    cctx.shadowBlur = 0;
+    cctx.restore();
+  }
+
+  // ── Particles ─────────────────────────────────────────────────────────────
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+
+    // Record trail before moving
+    if (p.trail !== null) {
+      p.trail.push({ x: p.x, y: p.y });
+      if (p.trail.length > 3) p.trail.shift();
+    }
+
+    p.x   += p.vx;
+    p.y   += p.vy;
+    p.vy  += p.gravity;
+    p.rot += p.spin;
+    p.alpha -= p.decay;
+
+    if (p.alpha <= 0 || p.y > H + 40 || p.x < -40 || p.x > W + 40) {
+      particles.splice(i, 1);
+      continue;
+    }
+
+    // Twinkle: oscillate display alpha
+    let da = p.alpha;
+    if (p.twinkle) {
+      p.twPhase += p.twFreq;
+      da = p.alpha * (0.35 + 0.65 * (Math.sin(p.twPhase) * 0.5 + 0.5));
+    }
+    da = Math.max(0, da);
+
+    // Draw fading trail on fast particles
+    if (p.trail && p.trail.length) {
+      const spd = Math.hypot(p.vx, p.vy);
+      if (spd > 4.5) {
+        for (let t = 0; t < p.trail.length; t++) {
+          const ta = da * ((t + 1) / p.trail.length) * 0.3;
+          cctx.globalAlpha = ta;
+          cctx.fillStyle   = p.color;
+          cctx.beginPath();
+          cctx.arc(p.trail[t].x, p.trail[t].y, p.size * 0.28, 0, Math.PI * 2);
+          cctx.fill();
+        }
+      }
+    }
+
+    cctx.globalAlpha = da;
+    drawParticle(cctx, p);
+  }
+  cctx.globalAlpha = 1;
+
+  // ── TETRIS! text — rainbow gradient, scale pulse ───────────────────────
+  if (tetrisText) {
+    const elapsed = now - tetrisText.startMs;
+    if (elapsed >= tetrisText.duration) {
+      tetrisText = null;
+    } else {
+      const fadeIn  = 180;
+      const holdEnd = tetrisText.duration - 450;
+      let alpha = elapsed < fadeIn
+        ? elapsed / fadeIn
+        : elapsed > holdEnd
+          ? Math.max(0, 1 - (elapsed - holdEnd) / 450)
+          : 1;
+
+      // 3 scale pulses during the hold phase
+      const holdDur = Math.max(1, holdEnd - fadeIn);
+      const pt      = Math.max(0, elapsed - fadeIn) / holdDur;
+      const pulse   = 1 + Math.sin(pt * Math.PI * 6) * 0.11;
+      const fs      = Math.floor(Math.max(28, W / 4.0) * pulse);
+
+      // Rainbow gradient
+      const grad = cctx.createLinearGradient(W * 0.05, 0, W * 0.95, 0);
+      grad.addColorStop(0,    '#ff2222');
+      grad.addColorStop(0.14, '#ff8800');
+      grad.addColorStop(0.28, '#ffee00');
+      grad.addColorStop(0.42, '#44ff44');
+      grad.addColorStop(0.57, '#00e5ff');
+      grad.addColorStop(0.71, '#8844ff');
+      grad.addColorStop(0.86, '#ff44cc');
+      grad.addColorStop(1,    '#ff2222');
+
+      cctx.save();
+      cctx.globalAlpha    = Math.max(0, alpha);
+      cctx.font           = `900 ${fs}px 'Segoe UI', system-ui, sans-serif`;
+      cctx.textAlign      = 'center';
+      cctx.textBaseline   = 'middle';
+      cctx.shadowColor    = '#ffd700';
+      cctx.shadowBlur     = 52;
+      cctx.fillStyle      = grad;
+      cctx.fillText('TETRIS!', W / 2, H / 2);
+      cctx.shadowBlur     = 12;
+      cctx.strokeStyle    = '#ffffff';
+      cctx.lineWidth      = 1.5;
+      cctx.strokeText('TETRIS!', W / 2, H / 2);
+      cctx.restore();
+    }
+  }
+
+  // ── Continue or stop ──────────────────────────────────────────────────────
+  const alive = particles.length > 0 || shockwaves.length > 0 || laserBeams.length > 0
+             || boardFlash || boardPulseAnim || tetrisText || screenShake
+             || pendingBursts.length > 0;
+
+  if (alive) {
+    celebRafId = requestAnimationFrame(animateCelebration);
+  } else {
+    celebRafId = null;
+    cctx.clearRect(0, 0, celebCanvas.width, celebCanvas.height);
+    boardContainer.style.transform = '';
   }
 }
 
@@ -608,8 +1131,6 @@ document.getElementById('restart-btn').addEventListener('touchend', e => {
 // ─── Resize handling ─────────────────────────────────────────────────────────
 window.addEventListener('resize', () => {
   setupCanvases();
-  nextCanvas.width  = 6 * CELL;
-  nextCanvas.height = 3 * CELL;
   render();
 });
 
