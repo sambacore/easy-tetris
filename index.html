@@ -1195,12 +1195,17 @@ function renderMessages(now) {
         const tw   = cctx.measureText(line).width;
         const cx   = Math.min(Math.max(m.x, MARGIN + tw / 2), SW - MARGIN - tw / 2);
 
-        cctx.globalAlpha = Math.max(0, lineAlpha);
-        cctx.shadowColor = color;
-        cctx.shadowBlur  = 22;
-        cctx.fillStyle   = color;
+        cctx.globalAlpha  = Math.max(0, lineAlpha);
+        // Dark outline so text is always readable over blocks
+        cctx.strokeStyle  = 'rgba(0,0,0,0.85)';
+        cctx.lineWidth    = Math.max(4, fs * 0.12);
+        cctx.lineJoin     = 'round';
+        cctx.strokeText(line, cx, currentY + li * lineSpacing);
+        cctx.shadowColor  = color;
+        cctx.shadowBlur   = 22;
+        cctx.fillStyle    = color;
         cctx.fillText(line, cx, currentY + li * lineSpacing);
-        cctx.shadowBlur  = 0;
+        cctx.shadowBlur   = 0;
       });
     } else {
       const maxW = SW - MARGIN * 2;
@@ -1211,12 +1216,17 @@ function renderMessages(now) {
       const tw   = cctx.measureText(m.lines[0]).width;
       const cx   = Math.min(Math.max(m.x, MARGIN + tw / 2), SW - MARGIN - tw / 2);
 
-      cctx.globalAlpha = Math.max(0, alpha);
-      cctx.shadowColor = m.color;
-      cctx.shadowBlur  = m.type === 'line' ? 18 : 10;
-      cctx.fillStyle   = m.color;
+      cctx.globalAlpha  = Math.max(0, alpha);
+      // Dark outline so text is always readable over blocks
+      cctx.strokeStyle  = 'rgba(0,0,0,0.85)';
+      cctx.lineWidth    = Math.max(4, fs * 0.12);
+      cctx.lineJoin     = 'round';
+      cctx.strokeText(m.lines[0], cx, currentY);
+      cctx.shadowColor  = m.color;
+      cctx.shadowBlur   = m.type === 'line' ? 18 : 10;
+      cctx.fillStyle    = m.color;
       cctx.fillText(m.lines[0], cx, currentY);
-      cctx.shadowBlur  = 0;
+      cctx.shadowBlur   = 0;
     }
 
     cctx.restore();
