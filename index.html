@@ -1138,7 +1138,21 @@ function triggerMessage(type) {
   }
 }
 
+// Fit font size so text never exceeds maxWidth, returns adjusted size
+function fitFontSize(ctx, text, desiredSize, maxWidth) {
+  let size = desiredSize;
+  ctx.font = `900 ${size}px monospace`;
+  while (ctx.measureText(text).width > maxWidth && size > 10) {
+    size -= 1;
+    ctx.font = `900 ${size}px monospace`;
+  }
+  return size;
+}
+
 function renderMessages(now) {
+  const SW = window.innerWidth;
+  const MARGIN = 12; // px from each edge
+
   for (let i = messages.length - 1; i >= 0; i--) {
     const m       = messages[i];
     const elapsed = now - m.startMs;
@@ -1165,28 +1179,43 @@ function renderMessages(now) {
     if (m.type === 'tetris') {
       const lineSpacing = m.size * 1.35;
       m.lines.forEach((line, li) => {
-        const lineElapsed = elapsed - li * 200; // 200ms stagger between lines
+        const lineElapsed = elapsed - li * 200;
         if (lineElapsed < 0) return;
 
         const lineAlpha = Math.min(1, lineElapsed / 150) * alpha;
-        const hue       = (elapsed * 0.25 + li * 120) % 360; // animated rainbow
+        const hue       = (elapsed * 0.25 + li * 120) % 360;
         const color     = `hsl(${hue}, 100%, 62%)`;
 
+        // Fit font size to screen width
+        const maxW = SW - MARGIN * 2;
+        const fs   = fitFontSize(cctx, line, m.size, maxW);
+        cctx.font  = `900 ${fs}px monospace`;
+
+        // Clamp x so text stays on screen
+        const tw   = cctx.measureText(line).width;
+        const cx   = Math.min(Math.max(m.x, MARGIN + tw / 2), SW - MARGIN - tw / 2);
+
         cctx.globalAlpha = Math.max(0, lineAlpha);
-        cctx.font        = `900 ${m.size}px monospace`;
         cctx.shadowColor = color;
         cctx.shadowBlur  = 22;
         cctx.fillStyle   = color;
-        cctx.fillText(line, m.x, currentY + li * lineSpacing);
+        cctx.fillText(line, cx, currentY + li * lineSpacing);
         cctx.shadowBlur  = 0;
       });
     } else {
+      const maxW = SW - MARGIN * 2;
+      const fs   = fitFontSize(cctx, m.lines[0], m.size, maxW);
+      cctx.font  = `900 ${fs}px monospace`;
+
+      // Clamp x so text stays on screen
+      const tw   = cctx.measureText(m.lines[0]).width;
+      const cx   = Math.min(Math.max(m.x, MARGIN + tw / 2), SW - MARGIN - tw / 2);
+
       cctx.globalAlpha = Math.max(0, alpha);
-      cctx.font        = `900 ${m.size}px monospace`;
       cctx.shadowColor = m.color;
       cctx.shadowBlur  = m.type === 'line' ? 18 : 10;
       cctx.fillStyle   = m.color;
-      cctx.fillText(m.lines[0], m.x, currentY);
+      cctx.fillText(m.lines[0], cx, currentY);
       cctx.shadowBlur  = 0;
     }
 
